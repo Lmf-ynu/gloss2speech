@@ -12,7 +12,7 @@
 | 默认分辨率 | 640×480 @ 30.7 fps |
 | 目标分辨率 | **1280×720 @ 30.3 fps（YUY2）**，支持 |
 | 首帧耗时 | 270ms（含 15 帧预热） |
-| 抓帧样例 | reports/camera_check.jpg（640×480）、reports/camera_720p_mjpg.jpg（1280×720） |
+| 抓帧样例 | 本机截图含人像，**未提交到公开仓库**（已在 .gitignore 排除）；需要时本地跑 `python scripts/camera_check.py` 重新生成 |
 
 ## 2. 浏览器级（Chromium headless，getUserMedia）
 
@@ -25,7 +25,7 @@
 | WebSocket | 已连接 ws://127.0.0.1:8000/ws/stream |
 | 页面状态 | "已连接，可以开始打手语" |
 | JS 报错 | 0 |
-| 页面截图 | reports/camera_page_real.png |
+| 页面截图 | 同上，本机截图含人像，未入库 |
 
 ## 3. 过程中发现并修复的问题
 
