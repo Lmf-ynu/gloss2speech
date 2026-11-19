@@ -19,3 +19,8 @@ Thumbs.db
 # 内部文档（仅本地留存，不公开）
 AI手语翻译平台-技术方案.md
 AI手语识别翻译平台_设计方案与技术路线.md
+
+frontend/dist/
+frontend/node_modules/
+research/fastpath-frontend/node_modules/
+reports/vue_page_check.png

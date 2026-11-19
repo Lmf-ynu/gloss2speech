@@ -1,14 +1,16 @@
-# 运行时
+# 后端（《工程实现方案》主实现：backend/）
 fastapi>=0.115
 uvicorn[standard]>=0.30
-numpy>=1.26
 pydantic>=2.7
 python-dotenv>=1.0
+openai>=1.40
 
-# 生产接入（原型用 Mock，不装也能跑）
-# openai>=1.40                     # 华为云 MaaS（OpenAI 兼容）
-# huaweicloudsdkcore>=3.1          # 华为云 SIS
+# 华为云 SIS SDK（不装则自动 Mock；生产环境必装）
+# huaweicloudsdkcore>=3.1
 # huaweicloudsdksis>=3.1
+
+# 前期端侧原型（research/）与基准脚本依赖
+numpy>=1.26
 
 # 开发/测试
 pytest>=8.0

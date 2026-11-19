@@ -1,0 +1,8 @@
+{
+  "name": "signbridge-frontend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/sign-core.test.mjs"
+  }
+}
