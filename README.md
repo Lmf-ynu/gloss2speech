@@ -292,6 +292,7 @@ python scripts/probe_cloud.py --runs 5    # 测真实 MaaS TTFT，写入 reports
 | [架构决策](docs/智能体体系与实时翻译架构.md) | 五指标定义、双平面、工具流、CoT 三档、ADR —— **冲突时以它为准** |
 | [W1 验收清单](docs/W1验收清单与实测方法.md) | 50 词 × 3 人 × 10 次测试设计、门禁、CSV 汇总 |
 | [工程实现方案](工程实现方案.md) | 原始工程方案（含修订提示） |
+| [实现对照表](docs/工程实现方案-实现对照表.md) | 原方案逐条实现状态审计（✅/🟡/🔄/❌） |
 | [延迟基准](reports/latency_budget.md) | 可复现的 P50/P95 报告 |
 | [摄像头自检](reports/camera_capture_check.md) | 设备/浏览器两级验证记录 |
 
