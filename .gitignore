@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+realtime/data/
+node_modules/
+
+# 本机自检产生的人像截图/视频帧：不入公开仓库
+reports/camera_check*.jpg
+reports/camera_720p*.jpg
+reports/camera_native.jpg
+reports/camera_page_*.png
+reports/devservers.txt
+
+# 本机临时
+*.log
+.DS_Store
+Thumbs.db

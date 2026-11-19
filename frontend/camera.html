@@ -1,0 +1,438 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SignBridge · 实时手语翻译（端侧快路径）</title>
+<style>
+  :root { --bg:#0b1020; --panel:#141a2e; --line:#26304b; --text:#e8ecf8; --muted:#8b96b3; --cyan:#38e8d0; --pink:#ff7ac6; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.6 "Microsoft YaHei", system-ui, sans-serif; }
+  header { display:flex; gap:10px; align-items:center; padding:12px 18px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  h1 { font-size:16px; margin:0 10px 0 0; font-weight:600; letter-spacing:.5px; }
+  input, button, select { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:6px 10px; font:inherit; }
+  button { cursor:pointer; } button:hover { border-color:var(--cyan); } button:disabled { opacity:.45; cursor:not-allowed; }
+  main { display:grid; grid-template-columns: minmax(0,1.4fr) minmax(340px,1fr); gap:16px; padding:16px 18px; }
+  .stage { position:relative; background:#000; border:1px solid var(--line); border-radius:14px; overflow:hidden; aspect-ratio:16/9; }
+  video, canvas { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; transform:scaleX(-1); }
+  .hud { position:absolute; right:10px; top:10px; background:rgba(10,16,32,.82); border:1px solid var(--line); border-radius:10px; padding:8px 10px; font-family:Consolas,monospace; font-size:12px; color:var(--muted); min-width:210px; }
+  .hud b { color:var(--cyan); font-weight:600; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:14px; }
+  .panel h2 { font-size:13px; color:var(--muted); font-weight:500; margin:0 0 10px; letter-spacing:1px; }
+  .caption { font-size:26px; font-weight:600; min-height:44px; letter-spacing:.5px; }
+  .caption.fast { color:#9aa6c4; font-weight:500; }
+  .caption.refined { color:#fff; }
+  .words { display:flex; flex-wrap:wrap; gap:8px; min-height:36px; margin-top:10px; }
+  .word { border:1px solid var(--line); border-radius:999px; padding:3px 12px; font-size:15px; background:#1b2338; cursor:pointer; }
+  .word.provisional { opacity:.55; font-style:italic; border-style:dashed; cursor:default; }
+  .word small { color:var(--muted); margin-left:6px; font-size:11px; }
+  .alt { color:var(--muted); font-size:13px; margin-top:8px; min-height:20px; }
+  .log { margin-top:12px; height:170px; overflow:auto; font-family:Consolas,monospace; font-size:12px; color:var(--muted); border-top:1px dashed var(--line); padding-top:8px; }
+  .err { position:fixed; left:50%; top:12px; transform:translateX(-50%); background:#7f1d1d; color:#fff; padding:8px 14px; border-radius:10px; display:none; z-index:9; max-width:80vw; }
+  .hint { color:var(--muted); font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>SignBridge · 端侧实时手语翻译</h1>
+  <label>WS <input id="wsUrl" size="30" /></label>
+  <button id="btnConnect">重连</button>
+  <label>场景
+    <select id="scene">
+      <option value="hospital">医院就诊</option>
+      <option value="bank">银行办理</option>
+      <option value="government">政务大厅</option>
+      <option value="daily">日常交流</option>
+    </select>
+  </label>
+  <label>模板名 <input id="label" size="9" placeholder="如 头疼" /></label>
+  <label>期望词 <input id="expected" size="8" placeholder="评估用" /></label>
+  <button id="btnRecord">录一个词</button>
+  <button id="btnClear">清空模板</button>
+  <button id="btnCsv">导出评估 CSV</button>
+  <span class="hint" id="status">正在初始化…</span>
+</header>
+
+<div class="err" id="err"></div>
+
+<main>
+  <section class="stage">
+    <video id="video" playsinline muted></video>
+    <canvas id="overlay"></canvas>
+    <div class="hud">
+      <div>FPS <b id="fps">-</b> · WS <b id="wsState">未连接</b></div>
+      <div>VAD <b id="vadState">-</b> · 模板 <b id="templates">0</b></div>
+      <div>L1 P50 <b id="p50">-</b> / P95 <b id="p95">-</b></div>
+      <div>n=<b id="nSample">0</b> · 最近匹配 <b id="matchMs">-</b></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>实时字幕（端侧 VAD + DTW → 服务端造句/语音）</h2>
+    <div class="caption fast" id="caption">等待手语…</div>
+    <div class="alt" id="alt"></div>
+    <h2 style="margin-top:16px">词元（灰色=暂定，点击可删除）</h2>
+    <div class="words" id="words"></div>
+    <div class="log" id="log"></div>
+  </section>
+</main>
+
+<script type="module">
+import { FilesetResolver, HandLandmarker, PoseLandmarker } from "./vendor/vision_bundle.js";
+
+const $ = (id) => document.getElementById(id);
+const video = $("video");
+const overlay = $("overlay");
+const ctx = overlay.getContext("2d");
+const WS_DEFAULT = "ws://" + (location.hostname || "127.0.0.1") + ":8000/ws/stream";
+$("wsUrl").value = WS_DEFAULT;
+
+let ws = null;
+let connected = false;
+let hands = null;
+let pose = null;
+let lastVideoTime = -1;
+let frames = 0;
+let fpsAt = performance.now();
+let fps = 0;
+let l1Samples = [];
+let matchSamples = [];
+let emaWords = [];
+let playedTraces = new Set();
+let currentAudio = null;
+let evalRows = [];
+let worker = null;
+let waitingRecord = false;
+
+// ---------------- 基础 UI ----------------
+function showError(msg) {
+  const el = $("err");
+  el.textContent = msg;
+  el.style.display = "block";
+  setTimeout(() => (el.style.display = "none"), 6000);
+}
+function log(line) {
+  const el = $("log");
+  el.insertAdjacentHTML("afterbegin", "<div>" + new Date().toLocaleTimeString() + "  " + line + "</div>");
+  while (el.childElementCount > 200) el.lastElementChild.remove();
+}
+function pct(arr, p) {
+  if (!arr.length) return null;
+  const sorted = [...arr].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length))];
+}
+function refreshHud() {
+  const recent = l1Samples.slice(-30);
+  const p50 = pct(recent, 50);
+  const p95 = pct(recent, 95);
+  $("p50").textContent = p50 == null ? "-" : Math.round(p50) + "ms";
+  $("p95").textContent = p95 == null ? "-" : Math.round(p95) + "ms";
+  $("nSample").textContent = String(l1Samples.length);
+  $("fps").textContent = fps.toFixed(0);
+  $("wsState").textContent = connected ? "已连接" : "未连接";
+  const m = matchSamples.slice(-30);
+  $("matchMs").textContent = m.length ? (pct(m, 50) * 1).toFixed(1) + "ms" : "-";
+}
+function renderWords() {
+  const box = $("words");
+  box.innerHTML = "";
+  emaWords.forEach((w, idx) => {
+    const el = document.createElement("span");
+    el.className = "word" + (w.final ? "" : " provisional");
+    el.innerHTML = w.text + "<small>" + Math.round((w.score || 0) * 100) + "%</small>";
+    if (w.final) {
+      el.title = "点击删除";
+      el.onclick = () => { emaWords.splice(idx, 1); renderWords(); };
+    }
+    box.appendChild(el);
+  });
+}
+
+// ---------------- 摄像头 / 模型 ----------------
+async function startCamera() {
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 }, facingMode: "user" },
+    audio: false,
+  });
+  video.srcObject = stream;
+  await video.play();
+  overlay.width = video.videoWidth || 1280;
+  overlay.height = video.videoHeight || 720;
+}
+async function initModels() {
+  const vision = await FilesetResolver.forVisionTasks("./vendor/wasm");
+  hands = await HandLandmarker.createFromOptions(vision, {
+    baseOptions: {
+      modelAssetPath: "./vendor/hand_landmarker.task",
+      delegate: "GPU",
+    },
+    runningMode: "VIDEO", numHands: 2,
+    minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5,
+  });
+  pose = await PoseLandmarker.createFromOptions(vision, {
+    baseOptions: {
+      modelAssetPath: "./vendor/pose_landmarker_lite.task",
+      delegate: "GPU",
+    },
+    runningMode: "VIDEO", numPoses: 1,
+  });
+}
+
+const HAND_EDGES = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],
+  [9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+const POSE_EDGES = [[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24]];
+
+function drawHands(res) {
+  if (!res || !res.landmarks) return;
+  ctx.lineWidth = 2;
+  res.landmarks.forEach((lm, i) => {
+    ctx.strokeStyle = i === 0 ? "#38e8d0" : "#ff7ac6";
+    ctx.fillStyle = ctx.strokeStyle;
+    for (const pair of HAND_EDGES) {
+      ctx.beginPath();
+      ctx.moveTo(lm[pair[0]].x * overlay.width, lm[pair[0]].y * overlay.height);
+      ctx.lineTo(lm[pair[1]].x * overlay.width, lm[pair[1]].y * overlay.height);
+      ctx.stroke();
+    }
+    for (const p of lm) {
+      ctx.beginPath();
+      ctx.arc(p.x * overlay.width, p.y * overlay.height, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  });
+}
+function drawPose(res) {
+  const lm = res && res.landmarks && res.landmarks[0];
+  if (!lm) return;
+  ctx.strokeStyle = "rgba(120,180,255,.9)";
+  ctx.lineWidth = 2;
+  for (const pair of POSE_EDGES) {
+    if (!lm[pair[0]] || !lm[pair[1]]) continue;
+    ctx.beginPath();
+    ctx.moveTo(lm[pair[0]].x * overlay.width, lm[pair[0]].y * overlay.height);
+    ctx.lineTo(lm[pair[1]].x * overlay.width, lm[pair[1]].y * overlay.height);
+    ctx.stroke();
+  }
+}
+function packLandmarks(handRes) {
+  const out = new Float32Array(42 * 3);
+  const groups = (handRes && handRes.landmarks) || [];
+  const handed = (handRes && handRes.handednesses) || [];
+  const left = [];
+  const right = [];
+  groups.forEach((lm, i) => {
+    const label = handed[i] && handed[i][0] ? handed[i][0].categoryName : (i === 0 ? "Left" : "Right");
+    (label === "Left" ? left : right).push(lm);
+  });
+  const put = (lm, offset) => {
+    for (let i = 0; i < 21; i++) {
+      out[(offset + i) * 3] = lm[i].x;
+      out[(offset + i) * 3 + 1] = lm[i].y;
+      out[(offset + i) * 3 + 2] = lm[i].z || 0;
+    }
+  };
+  if (left[0]) put(left[0], 0);
+  if (right[0]) put(right[0], 21);
+  return out;
+}
+function packPose(poseRes) {
+  const lm = poseRes && poseRes.landmarks && poseRes.landmarks[0];
+  if (!lm) return null;
+  const out = [];
+  const keep = Math.min(25, lm.length);
+  for (let i = 0; i < keep; i++) out.push([lm[i].x, lm[i].y, lm[i].z || 0]);
+  return out;
+}
+
+// ---------------- WebSocket（只传词与句子事件，不传帧） ----------------
+function connect() {
+  const url = $("wsUrl").value.trim() || WS_DEFAULT;
+  try { if (ws) ws.close(); } catch (e) {}
+  ws = new WebSocket(url);
+  connected = false;
+  refreshHud();
+  ws.onopen = () => {
+    connected = true;
+    refreshHud();
+    $("status").textContent = "已连接，可以开始打手语";
+    ws.send(JSON.stringify({ type: "control", action: "reset" }));
+  };
+  ws.onclose = () => { connected = false; refreshHud(); $("status").textContent = "WS 断开，可点重连"; };
+  ws.onerror = () => showError("WebSocket 连接失败，请确认后端已启动：" + url);
+  ws.onmessage = (e) => handleServerEvent(JSON.parse(e.data));
+}
+function sendGloss(text, score) {
+  if (connected) ws.send(JSON.stringify({ type: "gloss", text, score, t: Date.now() }));
+}
+function sendSentenceEnd() {
+  if (connected) ws.send(JSON.stringify({ type: "control", action: "sentence_end" }));
+}
+
+function handleServerEvent(ev) {
+  if (ev.type === "sentence") {
+    const cap = $("caption");
+    cap.textContent = ev.text;
+    cap.className = "caption " + ev.stage;
+    if (ev.alternative) $("alt").textContent = "备选：" + ev.alternative;
+    if (ev.stage === "refined") { emaWords = []; renderWords(); }
+    log("句子[" + ev.stage + "] " + ev.text);
+    return;
+  }
+  if (ev.type === "audio") {
+    if (!ev.url) return;
+    if (ev.stage === "refined" && playedTraces.has(ev.trace_id)) return;
+    playedTraces.add(ev.trace_id);
+    try {
+      if (currentAudio) currentAudio.pause();
+      currentAudio = new Audio(ev.url);
+      currentAudio.play().catch(() => {});
+    } catch (e) { log("音频播放失败：" + e.message); }
+    return;
+  }
+  if (ev.type === "vad") { $("vadState").textContent = ev.state; return; }
+  if (ev.type === "error") { log("错误[" + ev.code + "] " + ev.message); showError(ev.message || ev.code); }
+}
+
+// ---------------- Worker（端侧 VAD + DTW） ----------------
+function initWorker() {
+  worker = new Worker("./sign-worker.js", { type: "module" });
+  worker.onmessage = handleWorkerEvent;
+  worker.onerror = (e) => showError("端侧 Worker 异常：" + (e.message || "unknown"));
+  worker.postMessage({ type: "config", config: { startEnergy: 0.010, stopEnergy: 0.005, sentenceGapMs: 600 } });
+}
+function handleWorkerEvent(e) {
+  const msg = e.data || {};
+  if (msg.type === "ready") {
+    $("templates").textContent = String(msg.templates || 0);
+    return;
+  }
+  if (msg.type === "templates") {
+    $("templates").textContent = String(msg.count || 0);
+    return;
+  }
+  if (msg.type === "vad") { $("vadState").textContent = msg.state; return; }
+  if (msg.type === "gloss") {
+    if (msg.latencyMs && msg.latencyMs.match) matchSamples.push(msg.latencyMs.match);
+    if (msg.final) {
+      emaWords.push({ text: msg.text, score: msg.score, final: true });
+      const lat = msg.latencyMs || {};
+      if (lat.e2e) { l1Samples.push(lat.e2e); refreshHud(); }
+      evalRows.push({
+        ts: new Date().toISOString(), expected: $("expected").value.trim(), text: msg.text,
+        score: msg.score, vad_ms: lat.vad || "", match_ms: lat.match || "", e2e_ms: lat.e2e || "",
+        topk: (msg.topk || []).map((t) => t.text).join("|"),
+      });
+      log("词确认 " + msg.text + " (" + Math.round((msg.score || 0) * 100) + "%) e2e=" + (lat.e2e || "?") + "ms");
+      sendGloss(msg.text, msg.score);
+    } else {
+      const last = emaWords[emaWords.length - 1];
+      if (last && !last.final) { last.text = msg.text; last.score = msg.score; }
+      else emaWords.push({ text: msg.text, score: msg.score, final: false });
+    }
+    renderWords();
+    return;
+  }
+  if (msg.type === "sentence_end") { sendSentenceEnd(); return; }
+  if (msg.type === "record_armed") {
+    waitingRecord = true;
+    $("status").textContent = "请对着镜头做一次「" + msg.label + "」的标准动作…";
+    return;
+  }
+  if (msg.type === "record_done") {
+    waitingRecord = false;
+    $("btnRecord").disabled = false;
+    $("templates").textContent = String(msg.templates || 0);
+    log("模板已保存：" + msg.label + "（" + msg.frames + " 帧，" + msg.vadMs + "ms，模板总数 " + msg.templates + "）");
+    $("status").textContent = "模板已保存，继续打手语";
+    return;
+  }
+  if (msg.type === "no_match") {
+    log("未匹配到词（" + msg.segmentFrames + " 帧），请先录制模板或重打");
+    $("status").textContent = "未匹配：请先录制该词模板";
+    return;
+  }
+  if (msg.type === "error") { showError(msg.message); return; }
+}
+
+// ---------------- 主循环 ----------------
+function loop() {
+  requestAnimationFrame(loop);
+  if (video.readyState < 2) return;
+  if (video.currentTime === lastVideoTime) return;
+  lastVideoTime = video.currentTime;
+
+  const now = performance.now();
+  const handRes = hands ? hands.detectForVideo(video, now) : null;
+  const poseRes = pose ? pose.detectForVideo(video, now) : null;
+
+  ctx.clearRect(0, 0, overlay.width, overlay.height);
+  drawPose(poseRes);
+  drawHands(handRes);
+
+  if (worker) {
+    worker.postMessage({ type: "frame", lm: packLandmarks(handRes || {}), pose: packPose(poseRes), t: now });
+  }
+
+  frames++;
+  if (now - fpsAt > 500) {
+    fps = (frames * 1000) / (now - fpsAt);
+    frames = 0;
+    fpsAt = now;
+    refreshHud();
+  }
+}
+
+// ---------------- 模板录制 / CSV 导出 ----------------
+$("btnRecord").onclick = () => {
+  const label = $("label").value.trim();
+  if (!label) { showError("请先填写模板名（如 头疼）"); return; }
+  if (!worker) { showError("端侧 Worker 未就绪"); return; }
+  worker.postMessage({ type: "record_start", label, speaker: "web" });
+  $("btnRecord").disabled = true;
+  log("开始录制模板：" + label + "，请做一个标准动作");
+};
+$("btnClear").onclick = () => {
+  if (!confirm("确定清空本机所有模板？")) return;
+  if (worker) worker.postMessage({ type: "clear_templates" });
+  log("已清空模板");
+};
+$("btnCsv").onclick = () => {
+  if (!evalRows.length) { showError("还没有可导出的识别记录"); return; }
+  const header = "ts,expected,text,score,vad_ms,match_ms,e2e_ms,topk";
+  const body = evalRows.map((r) => [r.ts, r.expected, r.text, r.score, r.vad_ms, r.match_ms, r.e2e_ms, r.topk].join(",")).join("\n");
+  const blob = new Blob([header + "\n" + body], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "signbridge_eval_" + new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-") + ".csv";
+  a.click();
+  URL.revokeObjectURL(a.href);
+  log("已导出 " + evalRows.length + " 条识别记录");
+};
+document.addEventListener("keydown", (e) => {
+  const tag = (e.target && e.target.tagName) || "";
+  if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+  if (e.code === "Space" && !e.repeat) { e.preventDefault(); $("btnRecord").click(); }
+});
+$("btnConnect").onclick = () => connect();
+$("scene").onchange = () => {
+  if (ws && connected) ws.send(JSON.stringify({ type: "control", action: "reset" }));
+  emaWords = []; renderWords();
+};
+
+(async () => {
+  try {
+    $("status").textContent = "正在加载模型（首次约 3–10 秒）…";
+    initWorker();
+    await initModels();
+    await startCamera();
+    connect();
+    loop();
+    $("status").textContent = "就绪：填模板名 → 录音一次 → 开始打手语";
+  } catch (e) {
+    showError("初始化失败：" + e.message + "（摄像头需 HTTPS 或 localhost）");
+    $("status").textContent = "初始化失败";
+  }
+})();
+</script>
+</body>
+</html>
