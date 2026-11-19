@@ -13,8 +13,6 @@
 | [docs/智能体体系与实时翻译架构.md](docs/智能体体系与实时翻译架构.md) | **裁决层**：五指标定义、System1/System2 双平面、工具流、CoT 三档、改造清单、里程碑、ADR |
 | [docs/W1验收清单与实测方法.md](docs/W1验收清单与实测方法.md) | **W1 施工单**：50 词 × 3 人 × 10 次测试设计、门禁、CSV 汇总方法 |
 | [工程实现方案.md](工程实现方案.md) | 原始工程方案（已加修订横幅，冲突以架构文档为准） |
-| [AI手语翻译平台-技术方案.md](AI手语翻译平台-技术方案.md) | 产品与场景叙事 |
-| [AI手语识别翻译平台_设计方案与技术路线.md](AI手语识别翻译平台_设计方案与技术路线.md) | 算法与技术路线 |
 | [reports/latency_budget.md](reports/latency_budget.md) | 可复现的延迟基准（Python 管线） |
 | [reports/cloud_probe.md](reports/cloud_probe.md) | 云端首包探测（有密钥后跑，替换 Mock 假设） |
 
