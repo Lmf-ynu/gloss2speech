@@ -1,5 +1,5 @@
 <template>
-  <div class="translate">
+  <div class="translate" :class="{ 'big-mode': bigSubtitle }">
     <div class="left-col">
       <section class="stage">
         <video ref="videoRef" class="video" autoplay playsinline muted></video>
@@ -18,7 +18,10 @@
         <template #header>
           <div class="card-header-row">
             <span class="card-title">对话记录（{{ history.length }}）</span>
-            <el-button v-if="history.length" size="small" text @click="clearHistory">清空记录</el-button>
+            <div class="row" v-if="history.length">
+              <el-button size="small" text type="primary" @click="exportHistory">导出记录</el-button>
+              <el-button size="small" text @click="clearHistory">清空记录</el-button>
+            </div>
           </div>
         </template>
         <div v-if="!history.length" class="empty">暂无对话记录，打手语或点击反向沟通开始交流。</div>
@@ -125,7 +128,12 @@
       </el-card>
 
       <el-card shadow="never" class="card">
-        <template #header><div class="card-title">翻译结果</div></template>
+        <template #header>
+          <div class="card-header-row">
+            <span class="card-title">翻译结果</span>
+            <el-switch v-model="bigSubtitle" active-text="大字模式" inline-prompt />
+          </div>
+        </template>
         <el-alert
           v-if="isEmergency"
           title="紧急求助旁路已触发：跳过大模型直接播报标准化求助语音"
@@ -175,7 +183,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { api } from "../api";
 import { MotionDetector } from "../utils/motion";
@@ -223,6 +231,53 @@ const guardReason = ref("");
 const pendingRecognitions = ref(0);
 const pendingSentenceEnd = ref(false);
 const history = ref([]);
+
+/* ---------------- 对话记录持久化（localStorage，刷新不丢） ---------------- */
+const HISTORY_KEY = "signbridge.history.v1";
+const HISTORY_LIMIT = 200;
+let historySaveTimer = 0;
+
+function loadHistory() {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    if (!raw) return;
+    const list = JSON.parse(raw);
+    if (Array.isArray(list)) history.value = list.slice(-HISTORY_LIMIT);
+  } catch (error) {
+    /* 数据损坏时忽略，从空记录开始 */
+  }
+}
+
+watch(
+  history,
+  function () {
+    if (historySaveTimer) clearTimeout(historySaveTimer);
+    historySaveTimer = window.setTimeout(function () {
+      try {
+        localStorage.setItem(HISTORY_KEY, JSON.stringify(history.value.slice(-HISTORY_LIMIT)));
+      } catch (error) {
+        /* 存储满（如长期未清理）时静默失败，不阻塞交互 */
+      }
+    }, 300);
+  },
+  { deep: true },
+);
+
+/* ---------------- 大字模式（面对面共看一台设备时用） ---------------- */
+const BIG_KEY = "signbridge.big_subtitle";
+const bigSubtitle = ref(false);
+try {
+  bigSubtitle.value = localStorage.getItem(BIG_KEY) === "1";
+} catch (error) {
+  /* ignore */
+}
+watch(bigSubtitle, function (value) {
+  try {
+    localStorage.setItem(BIG_KEY, value ? "1" : "0");
+  } catch (error) {
+    /* ignore */
+  }
+});
 
 const manualRecording = ref(false);
 const recordingAudio = ref(false);
@@ -286,6 +341,7 @@ function syncRequireHands() {
 
 /* ---------------- 初始化 ---------------- */
 onMounted(async function () {
+  loadHistory();
   try {
     scenes.value = await api.getScenes();
   } catch (error) {
@@ -511,6 +567,45 @@ function clearWords() {
 
 function clearHistory() {
   history.value = [];
+  try {
+    localStorage.removeItem(HISTORY_KEY);
+  } catch (error) {
+    /* ignore */
+  }
+}
+
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
+
+function exportHistory() {
+  if (!history.value.length) return;
+  const lines = history.value.map(function (item) {
+    const role = item.role === "other" ? "对方（语音）" : "我（手语）";
+    let line = "[" + (item.time || "--:--:--") + "] " + role + "：" + item.text;
+    if (item.words && item.words.length) line += "（手语词：" + item.words.join(" · ") + "）";
+    if (item.emergency) line += "【紧急求助】";
+    return line;
+  });
+  const now = new Date();
+  const header =
+    "手语通 SignBridge 对话记录\n" +
+    "导出时间：" + now.toLocaleString() + "\n" +
+    "场景：" + sceneName.value + "\n" +
+    "条数：" + lines.length + "\n\n";
+  const blob = new Blob([header + lines.join("\n") + "\n"], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download =
+    "手语通对话记录-" +
+    now.getFullYear() + pad2(now.getMonth() + 1) + pad2(now.getDate()) +
+    "-" + pad2(now.getHours()) + pad2(now.getMinutes()) + ".txt";
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+  ElMessage.success("已导出 " + lines.length + " 条对话记录");
 }
 
 function onSceneChange() {
@@ -1005,9 +1100,73 @@ async function sendQuickReply(text) {
   color: #5b6584;
 }
 
+/* ---------------- 大字模式：面对面共看一台设备 ---------------- */
+.translate.big-mode .sentence {
+  font-size: 40px;
+  line-height: 1.45;
+}
+
+.translate.big-mode .history-text {
+  font-size: 20px;
+}
+
+.translate.big-mode .history-meta,
+.translate.big-mode .history-words {
+  font-size: 14px;
+}
+
+.translate.big-mode .other {
+  font-size: 22px;
+}
+
+.translate.big-mode .replies :deep(.el-button) {
+  font-size: 18px;
+  padding: 14px 18px;
+  height: auto;
+}
+
+.translate.big-mode .words :deep(.el-tag) {
+  font-size: 16px;
+  height: auto;
+  padding: 6px 12px;
+}
+
+/* ---------------- 响应式 ---------------- */
 @media (max-width: 1100px) {
   .translate {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .translate {
+    gap: 10px;
+  }
+
+  .stage {
+    min-height: 200px;
+  }
+
+  .hud {
+    padding: 4px 8px;
+    font-size: 10px;
+    line-height: 1.5;
+  }
+
+  .sentence {
+    font-size: 24px;
+  }
+
+  .translate.big-mode .sentence {
+    font-size: 32px;
+  }
+
+  .history-list {
+    max-height: 180px;
+  }
+
+  .grid-img {
+    max-width: 100%;
   }
 }
 </style>

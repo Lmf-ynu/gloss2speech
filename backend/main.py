@@ -21,6 +21,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from .config import settings
+from .guard import ApiGuardMiddleware
 from .services.llm import llm_service
 from .services.sis import sis_service
 from .services.vision import vision_service
@@ -34,6 +35,8 @@ app = FastAPI(
     version="1.0.0",
     description="AI 实时手语翻译后端（按《工程实现方案》实现）：Qwen-VL 识别 + DeepSeek 造句 + SIS 语音。",
 )
+# 先注册防护（内层），再注册 CORS（外层处理预检 OPTIONS，不会被口令拦截）
+app.add_middleware(ApiGuardMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

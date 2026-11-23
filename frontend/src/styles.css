@@ -52,3 +52,23 @@ body {
   flex: 1;
   padding: 16px 22px 28px;
 }
+
+/* 顶部服务状态标签可点击（重新输入访问口令） */
+.service-tag {
+  cursor: pointer;
+}
+
+/* ---------------- 移动端适配 ---------------- */
+@media (max-width: 768px) {
+  .app-header {
+    padding: 10px 12px;
+  }
+
+  .sub {
+    display: none;
+  }
+
+  .app-main {
+    padding: 10px 10px 20px;
+  }
+}

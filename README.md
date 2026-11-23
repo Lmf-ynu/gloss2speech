@@ -63,6 +63,9 @@ flowchart LR
 - 🔁 **反向沟通**：MediaRecorder 录音 → 转 16k 单声道 wav → SIS 一句话识别 → 字幕 + DeepSeek 生成 3 个快捷回复。
 - 🧪 **无密钥可跑**：所有云服务都有 Mock 回退（MOCK_MODE=auto），没有华为云密钥也能把全链路跑通、做 UI 联调。
 - 🐳 **Docker 部署**：`Dockerfile` + `deploy/docker-compose.yml` + Nginx 配置。
+- 🛡 **公网防护**：`API_TOKEN` 访问口令 + 后端/Nginx 双层限流（`backend/guard.py`），防止云额度被刷爆；浏览器首次访问自动弹窗输口令。
+- 💾 **对话持久化**：对话记录存 localStorage（刷新不丢，上限 200 条），支持一键导出 txt；「大字模式」+ 移动端适配，面对面共看一台设备更清楚。
+- 📈 **云端探测**：`scripts/probe_cloud.py --all` 一键实测 LLM/VL/TTS/ASR 四路真实延迟（P50/P95/P99）并生成 `reports/cloud_probe.md`。
 
 ---
 

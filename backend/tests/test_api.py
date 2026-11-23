@@ -220,3 +220,63 @@ def test_quick_reply_returns_three():
     replies = resp.json()["replies"]
     assert 1 <= len(replies) <= 3
     assert any("头疼" in reply for reply in replies)
+
+
+# ---------------------------------------------------------------- 公网防护（backend/guard.py）
+
+
+def test_guard_disabled_by_default():
+    # 默认 API_TOKEN 为空：不加口令头也能访问（本地开发不受影响）
+    assert settings.api_token == ""
+    assert client.get("/api/scenes").status_code == 200
+
+
+def test_guard_token_required_when_configured():
+    settings.api_token = "test-token-123"
+    try:
+        assert client.get("/api/scenes").status_code == 401
+        assert client.get("/api/scenes", headers={"X-API-Token": "wrong"}).status_code == 401
+        assert client.get("/api/scenes", headers={"X-API-Token": "test-token-123"}).status_code == 200
+        # 查询参数方式（浏览器直连调试用）
+        assert client.get("/api/scenes?token=test-token-123").status_code == 200
+        # 健康检查始终放行（探活不消耗云额度）
+        assert client.get("/api/health").status_code == 200
+        detail = client.get("/api/scenes").json()["detail"]
+        assert "X-API-Token" in detail
+    finally:
+        settings.api_token = ""
+
+
+def test_guard_rate_limit_returns_429():
+    settings.rate_limit_per_minute = 3
+    # 用独立 X-Real-IP 隔离限流计数，避免与本文件其他测试互相影响
+    headers = {"X-Real-IP": "203.0.113.99"}
+    try:
+        codes = [client.get("/api/scenes", headers=headers).status_code for _ in range(4)]
+        assert codes[:3] == [200, 200, 200]
+        assert codes[3] == 429
+        resp = client.get("/api/scenes", headers=headers)
+        assert resp.status_code == 429
+        assert "Retry-After" in resp.headers
+        # 健康检查不计限流
+        assert client.get("/api/health", headers=headers).status_code == 200
+    finally:
+        settings.rate_limit_per_minute = 120
+
+
+def test_guard_preflight_options_passes_through():
+    settings.api_token = "test-token-123"
+    try:
+        resp = client.options(
+            "/api/compose",
+            headers={
+                "Origin": "https://example.com",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type,x-api-token",
+            },
+        )
+        # 预检请求必须被 CORS 正常应答，而不是被口令拦成 401
+        assert resp.status_code == 200
+        assert "x-api-token" in resp.headers.get("access-control-allow-headers", "").lower()
+    finally:
+        settings.api_token = ""
