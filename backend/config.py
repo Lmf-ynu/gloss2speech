@@ -47,6 +47,13 @@ class Settings:
         self.vision_timeout = float(os.getenv("VISION_TIMEOUT", "15"))
         self.scene_default = os.getenv("SCENE_DEFAULT", "hospital")
 
+        # ---- 公网防护（backend/guard.py） ----
+        # API_TOKEN 非空时，/api/* 必须带 X-API-Token 头（/api/health 除外，便于探活）。
+        # 本地开发留空即关闭；上公网前必须设置，否则 MaaS/SIS 额度会被刷爆。
+        self.api_token = os.getenv("API_TOKEN", "").strip()
+        # 每客户端 IP 每分钟 /api/* 请求上限（滑窗），0 表示关闭限流。
+        self.rate_limit_per_minute = int(os.getenv("RATE_LIMIT_PER_MINUTE", "120"))
+
     # ---- 各服务的可用性 ----
     @property
     def vision_ready(self) -> bool:

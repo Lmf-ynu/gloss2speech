@@ -1,11 +1,42 @@
 /**
  * 与后端 6 个接口通信（对应《工程实现方案》§4）。
  * 开发时走 vite 代理；生产时默认走同源 /api（Nginx 反代），可用 VITE_API_BASE 覆盖。
+ *
+ * 访问口令（对应后端 API_TOKEN / backend/guard.py）：
+ * 优先级 localStorage["signbridge.api_token"] > 构建期 VITE_API_TOKEN。
+ * 后端开启口令后，所有 /api/* 请求自动携带 X-API-Token 头。
  */
 const BASE = (import.meta.env.VITE_API_BASE || "").replace(/\/+$/, "");
+const TOKEN_KEY = "signbridge.api_token";
+
+function getToken() {
+  try {
+    return localStorage.getItem(TOKEN_KEY) || import.meta.env.VITE_API_TOKEN || "";
+  } catch (error) {
+    return import.meta.env.VITE_API_TOKEN || "";
+  }
+}
+
+function setToken(token) {
+  try {
+    if (token) localStorage.setItem(TOKEN_KEY, token);
+    else localStorage.removeItem(TOKEN_KEY);
+  } catch (error) {
+    /* 隐私模式等场景下静默失败，仅本次会话内内存生效 */
+  }
+}
+
+function authHeaders(extra) {
+  const headers = Object.assign({}, extra || {});
+  const token = getToken();
+  if (token) headers["X-API-Token"] = token;
+  return headers;
+}
 
 async function request(path, options) {
-  const response = await fetch(BASE + path, options);
+  const opts = Object.assign({}, options || {});
+  opts.headers = authHeaders(opts.headers);
+  const response = await fetch(BASE + path, opts);
   if (!response.ok) {
     let detail = response.status + " " + response.statusText;
     try {
@@ -14,7 +45,9 @@ async function request(path, options) {
     } catch (error) {
       /* ignore */
     }
-    throw new Error(detail);
+    const error = new Error(detail);
+    error.status = response.status;
+    throw error;
   }
   return response.json();
 }
@@ -29,6 +62,8 @@ function postJSON(path, body) {
 
 export const api = {
   base: BASE,
+  getToken,
+  setToken,
   health: () => request("/api/health"),
   getScenes: () => request("/api/scenes"),
 
@@ -43,11 +78,15 @@ export const api = {
     const onError = handlers.onError || function () {};
     const response = await fetch(BASE + "/api/compose", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ words, scene_id: sceneId, history: history || [] }),
     });
     if (!response.ok || !response.body) {
-      onError(new Error("SSE 连接失败：" + response.status));
+      const error = new Error(
+        response.status === 401 ? "访问口令缺失或错误（401）" : "SSE 连接失败：" + response.status,
+      );
+      error.status = response.status;
+      onError(error);
       return;
     }
     const reader = response.body.getReader();
