@@ -1,11 +1,11 @@
 /**
- * 帧差法动作检测（对应《工程实现方案》§3.1）
+ * 帧差法动作检测（对应《工程实现方案》§3.1，支持手部存在门控与缩放缓存）
  *
  * 规则：
  *   - 每 100ms 从 <video> 取一帧，缩成 64×48 灰度图
  *   - 计算与上一帧的平均像素差 diff
- *   - IDLE：连续 3 帧 diff > T_start → SIGNING，开始缓存帧
- *   - SIGNING：缓存原始帧（每 200ms 一张，最多 30 张）；
+ *   - IDLE：连续 3 帧 diff > T_start（且若开启手部门控则检测到手） → SIGNING，开始缓存帧
+ *   - SIGNING：缓存缩放后的帧（最大宽 640px，每 200ms 一张，最多 30 张）；
  *              连续 5 帧 diff < T_stop → 动作结束，回调 onActionEnd(frames)
  *   - 动作结束后静止 1.5s → 句子结束，回调 onSentenceEnd()
  */
@@ -21,10 +21,12 @@ export class MotionDetector {
       sentenceSilence: 1500,
       cacheInterval: 200,
       maxFrames: 30,
+      maxCacheWidth: 640,
     };
     this.state = "IDLE";
     this.diff = 0;
     this.frames = [];
+    this.requireHands = false;
 
     this._hot = 0;
     this._cold = 0;
@@ -48,6 +50,10 @@ export class MotionDetector {
     if (tStop != null) this.config.tStop = tStop;
   }
 
+  setRequireHands(enabled) {
+    this.requireHands = Boolean(enabled);
+  }
+
   reset() {
     this.state = "IDLE";
     this.diff = 0;
@@ -67,19 +73,22 @@ export class MotionDetector {
     if (this.onStateChange) this.onStateChange(next);
   }
 
-  _cacheFrame(video, now) {
+  _cacheFrame(video, now, handBox = null) {
     if (this.frames.length >= this.config.maxFrames) return;
-    const width = video.videoWidth || 1280;
-    const height = video.videoHeight || 720;
+    const rawW = video.videoWidth || 1280;
+    const rawH = video.videoHeight || 720;
+    const scale = Math.min(1, this.config.maxCacheWidth / rawW);
+    const width = Math.max(1, Math.round(rawW * scale));
+    const height = Math.max(1, Math.round(rawH * scale));
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
     canvas.getContext("2d").drawImage(video, 0, 0, width, height);
-    this.frames.push({ canvas: canvas, at: now });
+    this.frames.push({ canvas: canvas, at: now, handBox: handBox || null });
   }
 
   /** 每帧调用（放在 requestAnimationFrame 里）；内部每 100ms 采样一次。 */
-  push(video, now) {
+  push(video, now, handMeta = null) {
     if (!video || video.readyState < 2 || !video.videoWidth) return this.state;
     if (now - this._lastSampleAt < this.config.sampleInterval) return this.state;
     this._lastSampleAt = now;
@@ -104,17 +113,19 @@ export class MotionDetector {
     this.diff = diff;
 
     const cfg = this.config;
+    const handBox = handMeta && handMeta.handBox ? handMeta.handBox : null;
+    const handsPresent = !this.requireHands || !handMeta || Boolean(handMeta.hasHands);
 
     if (this.state === "IDLE") {
-      if (diff > cfg.tStart) this._hot += 1;
+      if (diff > cfg.tStart && handsPresent) this._hot += 1;
       else this._hot = 0;
       if (this._hot >= cfg.startFrames) {
         this._hot = 0;
         this._cold = 0;
         this.frames = [];
-        this._lastCacheAt = 0;
         this._lastMotionAt = now;
-        this._cacheFrame(video, now);
+        this._cacheFrame(video, now, handBox);
+        this._lastCacheAt = now;
         this._setState("SIGNING");
       }
       return this.state;
@@ -129,7 +140,7 @@ export class MotionDetector {
       }
       if (now - this._lastCacheAt >= cfg.cacheInterval) {
         this._lastCacheAt = now;
-        this._cacheFrame(video, now);
+        this._cacheFrame(video, now, handBox);
       }
       if (this._cold >= cfg.stopFrames) {
         this._cold = 0;
@@ -142,15 +153,15 @@ export class MotionDetector {
     }
 
     // COMMITTING：等句子结束（1.5s 静止）；期间再次运动说明同句还有下一个词
-    if (diff > cfg.tStart) {
+    if (diff > cfg.tStart && handsPresent) {
       this._hot += 1;
       if (this._hot >= cfg.startFrames) {
         this._hot = 0;
         this._cold = 0;
         this.frames = [];
-        this._lastCacheAt = 0;
         this._lastMotionAt = now;
-        this._cacheFrame(video, now);
+        this._cacheFrame(video, now, handBox);
+        this._lastCacheAt = now;
         this._setState("SIGNING");
       }
     } else {

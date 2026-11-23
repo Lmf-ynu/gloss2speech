@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import base64
 import json
-import re
 from typing import Any
 
 from ..config import settings
@@ -57,7 +56,7 @@ class VisionService:
         )
         return resp.choices[0].message.content or ""
 
-    # ---------- 解析 ----------
+    # ---------- 解析与词表校验 ----------
     @staticmethod
     def _parse_response(text: str) -> dict[str, Any] | None:
         text = (text or "").strip()
@@ -74,7 +73,7 @@ class VisionService:
         words = data.get("words")
         if not isinstance(words, list):
             return None
-        words = [str(word) for word in words if str(word).strip()]
+        words = [str(word).strip() for word in words if str(word).strip()]
         confidence = data.get("confidence", 0)
         try:
             confidence = float(confidence)
@@ -84,13 +83,39 @@ class VisionService:
         if not isinstance(alternatives, list):
             alternatives = []
         alternatives = [
-            [str(word) for word in group]
+            [str(word).strip() for word in group if str(word).strip()]
             for group in alternatives
             if isinstance(group, list)
         ]
+        alternatives = [group for group in alternatives if group]
         return {
             "words": words,
             "confidence": max(0.0, min(1.0, confidence)),
+            "alternatives": alternatives,
+        }
+
+    @staticmethod
+    def _validate_against_vocab(parsed: dict[str, Any], scene: dict[str, Any]) -> dict[str, Any]:
+        """约束识别词必须属于当前场景词表；越界词降级到候选并压低置信度。"""
+        valid_vocab = {str(item["word"]).strip() for item in scene.get("vocab", []) if item.get("word")}
+        if not valid_vocab:
+            return parsed
+
+        raw_words = parsed["words"]
+        kept = [word for word in raw_words if word in valid_vocab]
+        dropped = [word for word in raw_words if word not in valid_vocab]
+
+        if not dropped:
+            return parsed
+
+        alternatives = list(parsed["alternatives"])
+        for word in dropped:
+            if [word] not in alternatives:
+                alternatives.append([word])
+
+        return {
+            "words": kept,
+            "confidence": min(parsed["confidence"], 0.45),
             "alternatives": alternatives,
         }
 
@@ -101,7 +126,7 @@ class VisionService:
             return {"words": [], "confidence": 0.0, "alternatives": [], "mock": True}
         word = vocab[self._mock_index % len(vocab)]
         self._mock_index += 1
-        fallback = [item for item in vocab if item != word][:1]
+        fallback = [[item] for item in vocab if item != word][:2]
         return {
             "words": [word],
             "confidence": 0.86,
@@ -127,7 +152,7 @@ class VisionService:
 
         prompt = build_vision_prompt(scene["name"], scene["vocab"])
         last_error: str | None = None
-        for attempt in range(2):  # 解析失败重试 1 次
+        for _ in range(2):  # 解析失败重试 1 次
             try:
                 text = await self._call_vl(prompt, image_base64)
             except Exception as exc:  # noqa: BLE001
@@ -135,7 +160,7 @@ class VisionService:
                 continue
             parsed = self._parse_response(text)
             if parsed is not None:
-                return parsed
+                return self._validate_against_vocab(parsed, scene)
             last_error = "视觉模型返回内容不是合法 JSON"
         raise RuntimeError(last_error or "Qwen-VL 识别失败")
 

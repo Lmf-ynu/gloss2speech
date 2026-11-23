@@ -19,6 +19,30 @@ import wave
 from ..config import settings
 
 
+def _build_tts_request(text: str):
+    """构造华为云 SIS RunTtsRequest（严格对齐 huaweicloudsdksis.v1 模型签名）。"""
+    from huaweicloudsdksis.v1 import PostCustomTTSReq, RunTtsRequest, TtsConfig
+
+    config = TtsConfig(
+        audio_format="wav",
+        sample_rate="16000",
+        _property=settings.sis_tts_voice,
+    )
+    return RunTtsRequest(body=PostCustomTTSReq(text=text, config=config))
+
+
+def _build_asr_request(audio_b64: str):
+    """构造华为云 SIS RecognizeShortAudioRequest（严格对齐 huaweicloudsdksis.v1 模型签名）。"""
+    from huaweicloudsdksis.v1 import Config, PostShortAudioReq, RecognizeShortAudioRequest
+
+    config = Config(
+        audio_format="wav",
+        _property=settings.sis_asr_property,
+        add_punc="yes",
+    )
+    return RecognizeShortAudioRequest(body=PostShortAudioReq(data=audio_b64, config=config))
+
+
 class SISService:
     def __init__(self) -> None:
         self._client = None
@@ -28,8 +52,8 @@ class SISService:
     def _get_client(self):
         if self._client is None:
             from huaweicloudsdkcore.auth.credentials import BasicCredentials
-            from huaweicloudsdkcore.region.region import Region
             from huaweicloudsdksis.v1 import SisClient
+            from huaweicloudsdksis.v1.region.sis_region import SisRegion
 
             credentials = BasicCredentials(
                 settings.hw_ak,
@@ -39,19 +63,18 @@ class SISService:
             self._client = (
                 SisClient.new_builder()
                 .with_credentials(credentials)
-                .with_region(Region.value_of(settings.sis_region))
+                .with_region(SisRegion.value_of(settings.sis_region))
                 .build()
             )
         return self._client
 
     def _tts_sync(self, text: str) -> dict:
-        from huaweicloudsdksis.v1.model import TtsConfig, TtsCustomRequest, TtsCustomRequestBody
-
         client = self._get_client()
-        config = TtsConfig(audio_format="wav", sample_rate="16000", voice_type="xiaoyan")
-        request = TtsCustomRequest(body=TtsCustomRequestBody(text=text, config=config))
-        response = client.tts_custom(request)
-        audio = response.audio
+        request = _build_tts_request(text)
+        response = client.run_tts(request)
+        audio = getattr(response.result, "data", None) if response.result is not None else None
+        if not audio:
+            raise RuntimeError("SIS TTS 未返回有效音频数据")
         if isinstance(audio, bytes):
             audio_b64 = base64.b64encode(audio).decode("ascii")
         else:
@@ -59,21 +82,8 @@ class SISService:
         return {"audio": audio_b64, "format": "wav"}
 
     def _asr_sync(self, audio_b64: str) -> dict:
-        from huaweicloudsdksis.v1.model import (
-            RecognizeShortAudioConfig,
-            RecognizeShortAudioRequest,
-            RecognizeShortAudioRequestBody,
-        )
-
         client = self._get_client()
-        config = RecognizeShortAudioConfig(
-            audio_format="wav",
-            sample_rate="16000",
-            language="chinese",
-        )
-        request = RecognizeShortAudioRequest(
-            body=RecognizeShortAudioRequestBody(data=audio_b64, config=config)
-        )
+        request = _build_asr_request(audio_b64)
         response = client.recognize_short_audio(request)
         text = ""
         if response.result is not None:

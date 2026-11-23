@@ -86,7 +86,12 @@ async def compose(req: ComposeRequest) -> StreamingResponse:
 
     async def event_stream():
         try:
-            async for item in llm_service.compose_stream(words, scene["name"], req.history):
+            async for item in llm_service.compose_stream(
+                words,
+                scene["name"],
+                req.history,
+                scene_id=scene["id"],
+            ):
                 yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
         except Exception as exc:  # noqa: BLE001
             payload = {"type": "error", "message": f"造句失败：{exc}"}

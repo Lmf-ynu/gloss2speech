@@ -40,6 +40,8 @@ class Settings:
         self.hw_sk = os.getenv("HW_SK", "").strip()
         self.hw_project_id = os.getenv("HW_PROJECT_ID", "").strip()
         self.sis_region = os.getenv("SIS_REGION", "cn-north-4").strip()
+        self.sis_tts_voice = os.getenv("SIS_TTS_VOICE", "chinese_xiaoyan_common").strip()
+        self.sis_asr_property = os.getenv("SIS_ASR_PROPERTY", "chinese_16k_common").strip()
 
         self.mock_mode = os.getenv("MOCK_MODE", "auto").strip().lower()
         self.vision_timeout = float(os.getenv("VISION_TIMEOUT", "15"))

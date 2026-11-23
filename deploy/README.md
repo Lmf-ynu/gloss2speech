@@ -36,6 +36,7 @@ docker compose -f deploy/docker-compose.yml up -d --build
 server {
     listen 443 ssl;
     server_name your-domain.com;
+    client_max_body_size 10m;
     ssl_certificate     /etc/nginx/certs/fullchain.pem;
     ssl_certificate_key /etc/nginx/certs/privkey.pem;
 
@@ -45,6 +46,10 @@ server {
         proxy_pass http://api:8000;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 60s;
     }
 }
 ```

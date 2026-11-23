@@ -1,8 +1,8 @@
 /**
  * 与后端 6 个接口通信（对应《工程实现方案》§4）。
- * 开发时走 vite 代理；构建后直接指向同主机 8000 端口（可用 VITE_API_BASE 覆盖）。
+ * 开发时走 vite 代理；生产时默认走同源 /api（Nginx 反代），可用 VITE_API_BASE 覆盖。
  */
-const BASE = import.meta.env.VITE_API_BASE || "http://" + (location.hostname || "127.0.0.1") + ":8000";
+const BASE = (import.meta.env.VITE_API_BASE || "").replace(/\/+$/, "");
 
 async function request(path, options) {
   const response = await fetch(BASE + path, options);
@@ -69,7 +69,7 @@ export const api = {
             try {
               const event = JSON.parse(payload);
               if (event.type === "delta") onDelta(event.text || "");
-              else if (event.type === "done") onDone(event.sentence || "", event.alternative || "");
+              else if (event.type === "done") onDone(event.sentence || "", event.alternative || "", event);
               else if (event.type === "error") onError(new Error(event.message || "造句失败"));
             } catch (error) {
               /* 忽略解析失败的半包 */
